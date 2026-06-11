@@ -1,0 +1,1128 @@
+<template>
+  <div class="app">
+    <header class="header">
+      <h1>记账 App</h1>
+      <div class="data-actions">
+        <button class="btn-export" @click="exportData">导出数据</button>
+        <button class="btn-import" @click="triggerImport">导入数据</button>
+        <input 
+          type="file" 
+          ref="fileInput"
+          style="display: none"
+          accept=".json"
+          @change="importData"
+        />
+      </div>
+    </header>
+
+    <div class="total">
+      <div class="total-label">总计</div>
+      <div class="total-amount">¥{{ totalAmount.toFixed(2) }}</div>
+    </div>
+
+    <div class="form">
+      <h2 class="form-title">添加记录</h2>
+      
+      <div class="form-group">
+        <label>时间</label>
+        <input 
+          type="text" 
+          v-model="newRecord.timeDisplay"
+          placeholder="2024/01/15 09:30"
+          required
+        />
+      </div>
+
+      <div class="form-group">
+        <label>付款人</label>
+        <select v-model="newRecord.payer">
+          <option value="李龙龙">李龙龙</option>
+          <option value="李志豪">李志豪</option>
+          <option value="魏兴兴">魏兴兴</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>类别</label>
+        <select v-model="newRecord.category">
+          <option value="1 住宿">1 住宿</option>
+          <option value="2 早餐">2 早餐</option>
+          <option value="3 午餐">3 午餐</option>
+          <option value="4 晚餐">4 晚餐</option>
+          <option value="5 发票">5 发票</option>
+          <option value="6 其他">6 其他</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>金额 (元)</label>
+        <input 
+          type="number" 
+          v-model.number="newRecord.amount"
+          step="0.01"
+          min="0"
+          placeholder="0.00"
+          required
+        />
+      </div>
+
+      <button class="btn-add" @click="addRecord">添加记录</button>
+    </div>
+
+    <div class="records">
+      <div class="records-header">
+        <h2 class="records-title">按付款人统计</h2>
+      </div>
+      <div class="payer-stats">
+        <div 
+          v-for="(stat, payer) in payerStats" 
+          :key="payer"
+          class="payer-stat-item"
+        >
+          <div class="payer-name">{{ payer }}</div>
+          <div class="payer-amount">¥{{ stat.toFixed(2) }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="recent-filter" style="margin-top: 20px;">
+      <div class="recent-filter-header">
+        <h3 class="filter-title">{{ recentMode === 'settlement' ? '结算后消费统计' : `最近 ${recentDays} 天消费` }}</h3>
+        <div class="recent-actions">
+          <button 
+            v-if="recentMode === 'settlement'"
+            class="btn-toggle-mode"
+            @click="switchToDays"
+          >
+            切换到按天数统计
+          </button>
+          <button 
+            v-if="recentMode === 'days'"
+            class="btn-toggle-mode"
+            @click="switchToSettlement"
+          >
+            切换到结算后统计
+          </button>
+          <button 
+            v-if="recentMode === 'days'"
+            class="btn-toggle-days"
+            @click="toggleRecentDays"
+          >
+            切换到最近 {{ recentDays === 2 ? 3 : 2 }} 天
+          </button>
+        </div>
+      </div>
+      <div class="recent-stats">
+        <div 
+          v-for="(stat, payer) in recentStats" 
+          :key="payer"
+          class="recent-stat-item"
+        >
+          <span class="recent-payer">{{ payer }}:</span>
+          <div class="recent-amount-wrapper">
+            <span class="recent-amount">¥{{ stat.toFixed(2) }}</span>
+            <span class="recent-third">¥{{ (stat / 3).toFixed(2) }}</span>
+          </div>
+        </div>
+      </div>
+      <div class="recent-period-info" v-if="recentMode === 'settlement' && lastSettlementTime">
+        统计时间：{{ lastSettlementTime }} 至今
+      </div>
+    </div>
+
+    <div class="last-settlement" style="margin-top: 20px;">
+      <div class="settlement-header">
+        <h3 class="filter-title">上次结算时间</h3>
+        <button class="btn-reset-settlement" @click="resetSettlement">重置结算时间</button>
+      </div>
+      <div 
+        class="settlement-time-wrapper"
+        @click="handleSettlementClick"
+        style="cursor: pointer;"
+        title="点击 3 次记录当前时间"
+      >
+        <div class="settlement-time">{{ lastSettlementTime || '暂无结算记录' }}</div>
+        <div class="settlement-hint" v-if="showSettlementHint">
+          再点击 {{ remainingClicks }} 次完成记录
+        </div>
+      </div>
+    </div>
+
+    <div class="date-filter" style="margin-top: 20px;">
+      <h3 class="filter-title">选择日期范围</h3>
+      <div class="filter-group">
+        <div class="filter-input">
+          <label>开始日期</label>
+          <input 
+            type="date" 
+            v-model="filterStartDate"
+            @change="applyDateFilter"
+          />
+        </div>
+        <div class="filter-input">
+          <label>结束日期</label>
+          <input 
+            type="date" 
+            v-model="filterEndDate"
+            @change="applyDateFilter"
+          />
+        </div>
+        <button class="btn-reset" @click="resetDateFilter">重置</button>
+      </div>
+      <div v-if="isFiltered" class="filtered-stats">
+        <div class="filtered-stats-title">选中日期统计</div>
+        <div 
+          v-for="(stat, payer) in filteredPayerStats" 
+          :key="payer"
+          class="filtered-stat-item"
+        >
+          <span class="filtered-payer">{{ payer }}:</span>
+          <div class="filtered-amount-wrapper">
+            <span class="filtered-amount">¥{{ stat.toFixed(2) }}</span>
+            <span class="filtered-third">¥{{ (stat / 3).toFixed(2) }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="records" style="margin-top: 20px;">
+      <div class="records-header">
+        <h2 class="records-title">记录列表</h2>
+      </div>
+
+      <div v-if="records.length === 0" class="empty-state">
+        <div class="empty-state-icon">📝</div>
+        <div class="empty-state-text">还没有记录，点击上方添加</div>
+      </div>
+
+        <div v-else>
+          <div 
+            v-for="(record, index) in paginatedRecords" 
+            :key="record.id"
+            class="record-item"
+          >
+            <div class="record-info">
+              <div class="record-payer">{{ record.payer }}</div>
+              <div class="record-category">{{ record.category }}</div>
+              <div class="record-time">
+                <input 
+                  v-if="editingRecord && editingRecord.id === record.id"
+                  type="text"
+                  v-model="editingRecord.timeDisplay"
+                  class="edit-time-input"
+                />
+                <span 
+                  v-else
+                  @dblclick="startEdit(record)"
+                  class="record-time-text"
+                  style="cursor: pointer;"
+                  title="双击编辑"
+                >
+                  {{ formatTime(record.time) }}
+                </span>
+                <span 
+                  v-if="record.note" 
+                  class="record-note-display"
+                  @click="editNote(record)"
+                >
+                  {{ record.note }}
+                </span>
+                <span 
+                  v-else 
+                  class="record-note-add"
+                  @click="editNote(record)"
+                >
+                  + 备注
+                </span>
+              </div>
+            </div>
+            <div class="record-amount">
+              <div 
+                v-if="editingRecord && editingRecord.id === record.id"
+                class="edit-amount-wrapper"
+              >
+                <input 
+                  type="number"
+                  v-model.number="editingRecord.amount"
+                  step="0.01"
+                  min="0"
+                  class="edit-amount-input"
+                />
+              </div>
+              <div 
+                v-else
+                class="record-price"
+                @dblclick="startEdit(record)"
+                style="cursor: pointer;"
+                title="双击编辑"
+              >
+                ¥{{ record.amount.toFixed(2) }}
+              </div>
+            </div>
+            <div class="record-actions">
+              <button 
+                v-if="editingRecord && editingRecord.id === record.id"
+                class="btn-save-edit"
+                @click="saveEdit(record)"
+              >
+                保存
+              </button>
+              <button 
+                v-if="editingRecord && editingRecord.id === record.id"
+                class="btn-cancel-edit"
+                @click="cancelEdit"
+              >
+                取消
+              </button>
+              <button 
+                v-if="!editingRecord"
+                class="btn-edit"
+                @click="startEdit(record)"
+              >
+                编辑
+              </button>
+              <button 
+                class="btn-delete"
+                :class="{ 'btn-delete-warn': deleteClickCount > 0 && recordToDelete === record.id }"
+                @click="deleteRecordFromList(record.id)"
+              >
+                {{ deleteClickCount === 0 ? '删除' : (deleteClickCount === 1 ? '再次点击删除' : '第三次点击删除') }}
+              </button>
+            </div>
+          </div>
+
+        <div v-if="totalPages > 1" class="pagination">
+          <button 
+            class="pagination-btn" 
+            @click="goToPrevious" 
+            :disabled="currentPage === 1"
+          >
+            上一页
+          </button>
+          <span class="pagination-info">
+            第 {{ currentPage }} 页，共 {{ totalPages }} 页
+          </span>
+          <button 
+            class="pagination-btn" 
+            @click="goToNext" 
+            :disabled="currentPage === totalPages"
+          >
+            下一页
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showNoteInput" class="note-modal-overlay" @click="cancelNote">
+      <div class="note-modal" @click.stop>
+        <h3 class="note-modal-title">编辑备注</h3>
+        <textarea 
+          v-model="noteInput" 
+          class="note-input"
+          placeholder="请输入备注内容"
+          rows="3"
+          autofocus
+        ></textarea>
+        <div class="note-modal-actions">
+          <button class="btn-cancel" @click="cancelNote">取消</button>
+          <button class="btn-save" @click="saveNote">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+import { ref, computed, watch } from 'vue'
+
+export default {
+  name: 'App',
+  setup() {
+    const newRecord = ref({
+      timeDisplay: new Date().toLocaleString('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      }).replace(/,/g, ''),
+      time: new Date().toISOString(),
+      payer: '李龙龙',
+      category: '1 住宿',
+      amount: null
+    })
+
+    const records = ref([])
+
+    const filterStartDate = ref('')
+    const filterEndDate = ref('')
+    const isFiltered = ref(false)
+
+    const currentPage = ref(1)
+    const pageSize = 10
+
+    const editingRecord = ref(null)
+    const showNoteInput = ref(false)
+    const noteInput = ref('')
+    const recentDays = ref(2)
+    const recentMode = ref('settlement')
+    const lastSettlementTime = ref('')
+    const settlementClickCount = ref(0)
+    const settlementTimeout = ref(null)
+
+    const loadRecords = () => {
+      const saved = localStorage.getItem('expenseRecords')
+      if (saved) {
+        records.value = JSON.parse(saved)
+      }
+      const settlement = localStorage.getItem('lastSettlementTime')
+      if (settlement) {
+        lastSettlementTime.value = settlement
+      }
+      const savedMode = localStorage.getItem('recentStatsMode')
+      if (savedMode) {
+        recentMode.value = savedMode
+      }
+    }
+
+    const saveRecords = () => {
+      localStorage.setItem('expenseRecords', JSON.stringify(records.value))
+    }
+
+    watch(records, saveRecords, { deep: true })
+
+    loadRecords()
+
+    const addRecord = () => {
+      if (!newRecord.value.amount || newRecord.value.amount <= 0) {
+        alert('请输入有效金额')
+        return
+      }
+
+      const timeStr = newRecord.value.timeDisplay.trim()
+      const parsedTime = parseTimeInput(timeStr)
+      if (!parsedTime) {
+        alert('时间格式不正确，请使用 YYYY/MM/DD HH:mm 格式')
+        return
+      }
+
+      records.value.push({
+        id: Date.now(),
+        time: parsedTime,
+        payer: newRecord.value.payer,
+        category: newRecord.value.category,
+        amount: newRecord.value.amount,
+        note: ''
+      })
+
+      newRecord.value = {
+        timeDisplay: new Date().toLocaleString('zh-CN', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit'
+        }).replace(/,/g, ''),
+        time: new Date().toISOString(),
+        payer: '李龙龙',
+        category: '1 住宿',
+        amount: null
+      }
+    }
+
+    const parseTimeInput = (timeStr) => {
+      const formats = [
+        /(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{1,2})/,
+        /(\d{4})[-/](\d{1,2})[-/](\d{1,2})T(\d{1,2}):(\d{1,2})/
+      ]
+
+      for (const regex of formats) {
+        const match = timeStr.match(regex)
+        if (match) {
+          const [, year, month, day, hour, minute] = match
+          const date = new Date(+year, +month - 1, +day, +hour, +minute)
+          if (!isNaN(date.getTime())) {
+            return date.toISOString()
+          }
+        }
+      }
+      return null
+    }
+
+    const deleteRecord = (index) => {
+      records.value.splice(index, 1)
+    }
+
+    const deleteClickCount = ref(0)
+    const deleteTimeout = ref(null)
+    const recordToDelete = ref(null)
+
+    const deleteRecordFromList = (id) => {
+      if (deleteClickCount.value === 0) {
+        deleteClickCount.value = 1
+        recordToDelete.value = id
+        deleteTimeout.value = setTimeout(() => {
+          deleteClickCount.value = 0
+          recordToDelete.value = null
+          deleteTimeout.value = null
+        }, 2000)
+      } else if (deleteClickCount.value === 1 && recordToDelete.value === id) {
+        clearTimeout(deleteTimeout.value)
+        deleteClickCount.value = 2
+        deleteTimeout.value = setTimeout(() => {
+          deleteClickCount.value = 0
+          recordToDelete.value = null
+          deleteTimeout.value = null
+        }, 3000)
+      } else if (deleteClickCount.value === 2 && recordToDelete.value === id) {
+        clearTimeout(deleteTimeout.value)
+        const index = records.value.findIndex(r => r.id === id)
+        if (index !== -1) {
+          records.value.splice(index, 1)
+        }
+        deleteClickCount.value = 0
+        recordToDelete.value = null
+        deleteTimeout.value = null
+        alert('已删除')
+      }
+    }
+
+    const totalAmount = computed(() => {
+      return records.value.reduce((sum, record) => {
+        return sum + record.amount
+      }, 0)
+    })
+
+    const sortedRecords = computed(() => {
+      return [...records.value].sort((a, b) => {
+        return new Date(b.time) - new Date(a.time)
+      })
+    })
+
+    const paginatedRecords = computed(() => {
+      let filtered = records.value
+      if (isFiltered.value && filterStartDate.value && filterEndDate.value) {
+        const start = new Date(filterStartDate.value)
+        start.setHours(0, 0, 0, 0)
+        const end = new Date(filterEndDate.value)
+        end.setHours(23, 59, 59, 999)
+        filtered = records.value.filter(record => {
+          const recordDate = new Date(record.time)
+          return recordDate.getTime() >= start.getTime() && recordDate.getTime() <= end.getTime()
+        })
+      }
+      const sorted = [...filtered].sort((a, b) => {
+        return new Date(b.time) - new Date(a.time)
+      })
+      const start = (currentPage.value - 1) * pageSize
+      const end = start + pageSize
+      return sorted.slice(start, end)
+    })
+
+    const totalPages = computed(() => {
+      let filtered = records.value
+      if (isFiltered.value && filterStartDate.value && filterEndDate.value) {
+        const start = new Date(filterStartDate.value)
+        start.setHours(0, 0, 0, 0)
+        const end = new Date(filterEndDate.value)
+        end.setHours(23, 59, 59, 999)
+        filtered = records.value.filter(record => {
+          const recordDate = new Date(record.time)
+          return recordDate.getTime() >= start.getTime() && recordDate.getTime() <= end.getTime()
+        })
+      }
+      return Math.ceil(filtered.length / pageSize)
+    })
+
+    const filteredPayerStats = computed(() => {
+      let filtered = records.value
+      if (isFiltered.value && filterStartDate.value && filterEndDate.value) {
+        const start = new Date(filterStartDate.value)
+        start.setHours(0, 0, 0, 0)
+        const end = new Date(filterEndDate.value)
+        end.setHours(23, 59, 59, 999)
+        filtered = records.value.filter(record => {
+          const recordDate = new Date(record.time)
+          return recordDate.getTime() >= start.getTime() && recordDate.getTime() <= end.getTime()
+        })
+      }
+      const stats = {}
+      filtered.forEach(record => {
+        const payer = record.payer || '未知'
+        if (!stats[payer]) {
+          stats[payer] = 0
+        }
+        stats[payer] += record.amount
+      })
+      return stats
+    })
+
+    const payerStats = computed(() => {
+      const stats = {}
+      records.value.forEach(record => {
+        const payer = record.payer || '未知'
+        if (!stats[payer]) {
+          stats[payer] = 0
+        }
+        stats[payer] += record.amount
+      })
+      return stats
+    })
+
+    const goToPage = (page) => {
+      if (page >= 1 && page <= totalPages.value) {
+        currentPage.value = page
+      }
+    }
+
+    const goToPrevious = () => {
+      if (currentPage.value > 1) {
+        currentPage.value--
+      }
+    }
+
+    const goToNext = () => {
+      if (currentPage.value < totalPages.value) {
+        currentPage.value++
+      }
+    }
+
+    const formatTime = (timeStr) => {
+      const date = new Date(timeStr)
+      const year = date.getFullYear()
+      const month = (date.getMonth() + 1).toString().padStart(2, '0')
+      const day = date.getDate().toString().padStart(2, '0')
+      const hour = date.getHours().toString().padStart(2, '0')
+      const minute = date.getMinutes().toString().padStart(2, '0')
+      return `${year}/${month}/${day} ${hour}:${minute}`
+    }
+
+    const applyDateFilter = () => {
+      if (filterStartDate.value && filterEndDate.value) {
+        isFiltered.value = true
+      }
+    }
+
+    const resetDateFilter = () => {
+      filterStartDate.value = ''
+      filterEndDate.value = ''
+      isFiltered.value = false
+    }
+
+    const recentStats = computed(() => {
+      const stats = {}
+      const now = new Date()
+      let startTime = null
+      
+      if (recentMode.value === 'settlement' && lastSettlementTime.value) {
+        startTime = new Date(lastSettlementTime.value)
+      } else if (recentMode.value === 'days') {
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+        startTime = new Date(today)
+        startTime.setDate(startTime.getDate() - recentDays.value + 1)
+        startTime.setHours(0, 0, 0, 0)
+      }
+      
+      if (!startTime) {
+        return stats
+      }
+      
+      records.value.forEach(record => {
+        const recordDate = new Date(record.time)
+        if (recordDate.getTime() >= startTime.getTime()) {
+          const payer = record.payer || '未知'
+          if (!stats[payer]) {
+            stats[payer] = 0
+          }
+          stats[payer] += record.amount
+        }
+      })
+      return stats
+    })
+
+    const switchToSettlement = () => {
+      recentMode.value = 'settlement'
+      localStorage.setItem('recentStatsMode', 'settlement')
+    }
+
+    const switchToDays = () => {
+      recentMode.value = 'days'
+      localStorage.setItem('recentStatsMode', 'days')
+    }
+
+    const toggleRecentDays = () => {
+      recentDays.value = recentDays.value === 2 ? 3 : 2
+    }
+
+    const showSettlementHint = computed(() => {
+      return settlementClickCount.value > 0 && settlementClickCount.value < 3
+    })
+
+    const remainingClicks = computed(() => {
+      return 3 - settlementClickCount.value
+    })
+
+    const editNote = (record) => {
+      editingRecord.value = record
+      noteInput.value = record.note || ''
+      showNoteInput.value = true
+    }
+
+    const saveNote = () => {
+      if (editingRecord.value) {
+        editingRecord.value.note = noteInput.value.trim()
+      }
+      showNoteInput.value = false
+      editingRecord.value = null
+      noteInput.value = ''
+    }
+
+    const fileInput = ref(null)
+
+    const exportData = () => {
+      const data = localStorage.getItem('expenseRecords')
+      if (!data || data === '[]') {
+        alert('没有可导出的数据')
+        return
+      }
+      const blob = new Blob([data], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const now = new Date()
+      const timeStr = `${now.getFullYear()}${(now.getMonth() + 1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}-${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}`
+      a.download = `记账-${timeStr}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+
+    const triggerImport = () => {
+      fileInput.value.click()
+    }
+
+    const importData = (event) => {
+      const file = event.target.files[0]
+      if (!file) return
+      
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        try {
+          const imported = JSON.parse(e.target.result)
+          let recordsToImport = []
+          
+          if (Array.isArray(imported)) {
+            recordsToImport = imported
+          } else if (imported && Array.isArray(imported.records)) {
+            recordsToImport = imported.records
+          } else {
+            alert('文件格式不正确')
+            return
+          }
+          
+          if (confirm('导入将覆盖当前数据，确定继续吗？')) {
+            records.value = recordsToImport
+            alert('导入成功！')
+          }
+        } catch (err) {
+          alert('文件解析失败：' + err.message)
+        }
+      }
+      reader.readAsText(file)
+      event.target.value = ''
+    }
+
+    const cancelNote = () => {
+      showNoteInput.value = false
+      editingRecord.value = null
+      noteInput.value = ''
+    }
+
+    const editRecordTemp = ref(null)
+
+    const startEdit = (record) => {
+      editRecordTemp.value = {
+        id: record.id,
+        timeDisplay: formatTime(record.time),
+        amount: record.amount
+      }
+      editingRecord.value = editRecordTemp.value
+    }
+
+    const saveEdit = (record) => {
+      if (!editRecordTemp.value) return
+      
+      const timeStr = editRecordTemp.value.timeDisplay.trim()
+      const parsedTime = parseTimeInput(timeStr)
+      
+      if (!parsedTime) {
+        alert('时间格式不正确，请使用 YYYY/MM/DD HH:mm 格式')
+        return
+      }
+      
+      if (!editRecordTemp.value.amount || editRecordTemp.value.amount <= 0) {
+        alert('请输入有效金额')
+        return
+      }
+      
+      record.time = parsedTime
+      record.amount = editRecordTemp.value.amount
+      
+      editRecordTemp.value = null
+      editingRecord.value = null
+    }
+
+    const cancelEdit = () => {
+      editRecordTemp.value = null
+      editingRecord.value = null
+    }
+
+    return {
+      newRecord,
+      records,
+      addRecord,
+      deleteRecord,
+      deleteRecordFromList,
+      totalAmount,
+      paginatedRecords,
+      currentPage,
+      totalPages,
+      goToPage,
+      goToPrevious,
+      goToNext,
+      formatTime,
+      payerStats,
+      filterStartDate,
+      filterEndDate,
+      isFiltered,
+      filteredPayerStats,
+      applyDateFilter,
+      resetDateFilter,
+      recentDays,
+      recentMode,
+      recentStats,
+      toggleRecentDays,
+      switchToSettlement,
+      switchToDays,
+      lastSettlementTime,
+      settlementClickCount,
+      showSettlementHint,
+      remainingClicks,
+      handleSettlementClick,
+      resetSettlement,
+      showNoteInput,
+      noteInput,
+      editNote,
+      saveNote,
+      cancelNote,
+      fileInput,
+      exportData,
+      triggerImport,
+      importData,
+      editingRecord,
+      startEdit,
+      saveEdit,
+      cancelEdit,
+      deleteClickCount,
+      recordToDelete
+    }
+  }
+}
+</script>
+
+<style scoped>
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.header h1 {
+  font-size: 24px;
+  color: #333;
+}
+
+.data-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-export,
+.btn-import {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: opacity 0.2s;
+}
+
+.btn-export {
+  background: #4caf50;
+  color: white;
+}
+
+.btn-import {
+  background: #2196f3;
+  color: white;
+}
+
+.btn-export:hover,
+.btn-import:hover {
+  opacity: 0.9;
+}
+
+.record-item {
+  position: relative;
+}
+
+.record-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-edit {
+  padding: 4px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.btn-edit:hover {
+  background: #f5f5f5;
+}
+
+.btn-save-edit {
+  padding: 4px 12px;
+  border: none;
+  border-radius: 4px;
+  background: #4caf50;
+  color: white;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.btn-save-edit:hover {
+  background: #45a049;
+}
+
+.btn-cancel-edit {
+  padding: 4px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.btn-cancel-edit:hover {
+  background: #f5f5f5;
+}
+
+.edit-time-input {
+  padding: 4px 8px;
+  border: 1px solid #667eea;
+  border-radius: 4px;
+  font-size: 13px;
+  width: 160px;
+}
+
+.edit-amount-input {
+  padding: 4px 8px;
+  border: 1px solid #667eea;
+  border-radius: 4px;
+  font-size: 14px;
+  width: 100px;
+  text-align: right;
+}
+
+.edit-amount-wrapper {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.btn-delete {
+  padding: 4px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: white;
+  color: #f44336;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.btn-delete:hover {
+  background: #f44336;
+  color: white;
+}
+
+.btn-delete-warn {
+  background: #ff9800;
+  color: white;
+  border-color: #ff9800;
+}
+
+.btn-delete-warn:hover {
+  background: #f57c00;
+}
+
+.recent-filter {
+  background: #f9f9f9;
+  padding: 15px;
+  border-radius: 8px;
+}
+
+.recent-filter-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.recent-filter .filter-title {
+  font-size: 16px;
+  color: #333;
+  margin: 0;
+}
+
+.recent-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-toggle-mode {
+  padding: 6px 12px;
+  border: 1px solid #4caf50;
+  border-radius: 6px;
+  background: white;
+  color: #4caf50;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.btn-toggle-mode:hover {
+  background: #4caf50;
+  color: white;
+}
+
+.btn-toggle-days {
+  padding: 6px 12px;
+  border: 1px solid #667eea;
+  border-radius: 6px;
+  background: white;
+  color: #667eea;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.btn-toggle-days:hover {
+  background: #667eea;
+  color: white;
+}
+
+.recent-period-info {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+.recent-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 15px;
+}
+
+.recent-stat-item {
+  background: white;
+  padding: 10px 15px;
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 150px;
+}
+
+.recent-payer {
+  font-size: 14px;
+  color: #666;
+  font-weight: 500;
+}
+
+.recent-amount-wrapper {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.recent-amount {
+  font-size: 18px;
+  font-weight: bold;
+  color: #333;
+}
+
+.recent-third {
+  font-size: 14px;
+  color: #999;
+}
+
+.last-settlement {
+  background: #fff3e0;
+  padding: 15px;
+  border-radius: 8px;
+  border-left: 4px solid #ff9800;
+}
+
+.settlement-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.settlement-header .filter-title {
+  font-size: 15px;
+  color: #e65100;
+  margin: 0;
+}
+
+.btn-reset-settlement {
+  padding: 4px 10px;
+  border: 1px solid #ff9800;
+  border-radius: 4px;
+  background: white;
+  color: #ff9800;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.btn-reset-settlement:hover {
+  background: #ff9800;
+  color: white;
+}
+
+.settlement-time-wrapper {
+  padding: 10px;
+  background: white;
+  border-radius: 6px;
+}
+
+.settlement-time {
+  font-size: 16px;
+  color: #e65100;
+  font-weight: 500;
+}
+
+.settlement-hint {
+  font-size: 12px;
+  color: #ff9800;
+  margin-top: 5px;
+}
+</style>
