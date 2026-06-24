@@ -17,9 +17,9 @@
 
     <div class="total">
       <div class="total-label">总计</div>
-      <div class="total-amount">¥{{ totalAmount.toFixed(2) }}</div>
+      <div class="total-amount">¥{{ totalAmount.toFixed(2) }} <span class="total-avg">(人均 ¥{{ (totalAmount / activePayerCount).toFixed(2) }})</span></div>
       <div class="subsidy-estimate">预计补助花费 ¥{{ subsidyEstimate.toFixed(2) }} 元 (5000)</div>
-      <div class="subsidy-formula">计算公式：唯一天数 × 170 元/天 = {{ uniqueDaysCount }}天 × 170 = ¥{{ subsidyEstimate.toFixed(2) }}</div>
+      <div class="subsidy-formula">计算公式：(唯一天数 - 1) × 170 元/天 = ({{ uniqueDaysCount }} - 1) × 170 = ¥{{ subsidyEstimate.toFixed(2) }}</div>
     </div>
 
     <div class="form">
@@ -38,9 +38,7 @@
       <div class="form-group">
         <label>付款人</label>
         <select v-model="newRecord.payer">
-          <option value="李龙龙">李龙龙</option>
-          <option value="李志豪">李志豪</option>
-          <option value="魏兴兴">魏兴兴</option>
+          <option v-for="name in payerNames" :key="name" :value="name">{{ name }}</option>
         </select>
       </div>
 
@@ -71,6 +69,40 @@
       <button class="btn-add" @click="addRecord">添加记录</button>
     </div>
 
+    <div class="settings-section">
+      <h2 class="form-title">设置</h2>
+      <div class="form-group">
+        <label>人员名字</label>
+        <div class="payer-names-edit">
+          <div v-for="(name, i) in payerNames" :key="i" class="payer-name-input-row">
+            <input type="text" v-model="payerNames[i]" @change="savePayerNames" />
+            <button class="btn-delete-payer" @click="deletePayer(i)" :disabled="payerNames.length <= 1">×</button>
+          </div>
+          <button class="btn-add-payer" @click="addPayer">+ 添加人员</button>
+        </div>
+        <div v-if="recentDeletedPayers.length > 0" class="deleted-payers">
+          <label class="deleted-label">最近删除（3天内可恢复）：</label>
+          <div v-for="(item, i) in recentDeletedPayers" :key="i" class="deleted-payer-row">
+            <span class="deleted-name">{{ item.name }}</span>
+            <span class="deleted-time">{{ formatDeletedTime(item.deletedAt) }}</span>
+            <button class="btn-restore-payer" @click="restorePayer(item)">恢复</button>
+            <button class="btn-delete-forever" @click="deletePermanently(item)">彻底删除</button>
+          </div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>一键重置所有数据</label>
+        <div class="reset-row">
+          <input type="text" v-model="resetPassword" placeholder="请输入密码 admin" />
+          <button class="btn-reset" @click="resetAllData">重置</button>
+        </div>
+        <div v-if="hasResetBackup" class="reset-backup-row">
+          <span class="backup-hint">有可恢复的重置备份（30天内）</span>
+          <button class="btn-recover-reset" @click="recoverResetData">恢复数据</button>
+        </div>
+      </div>
+    </div>
+
     <div class="records" style="margin-top: 20px;">
       <div class="records-header">
         <h2 class="records-title">按付款人统计</h2>
@@ -84,7 +116,7 @@
           <span class="payer-name-row">{{ payer }}:</span>
           <div class="payer-amount-row">
             <span class="payer-amount-text">¥{{ stat.toFixed(2) }}</span>
-            <span class="payer-third-text">¥{{ (stat / 3).toFixed(2) }}</span>
+            <span class="payer-third-text">¥{{ (stat / activePayerCount).toFixed(2) }}</span>
           </div>
         </div>
       </div>
@@ -101,7 +133,7 @@
           <span class="payer-name-row">{{ payer }}:</span>
           <div class="payer-amount-row">
             <span class="payer-amount-text">¥{{ stat.toFixed(2) }}</span>
-            <span class="payer-third-text">¥{{ (stat / 3).toFixed(2) }}</span>
+            <span class="payer-third-text">¥{{ (stat / activePayerCount).toFixed(2) }}</span>
           </div>
         </div>
       </div>
@@ -143,7 +175,7 @@
           <span class="payer-name-row">{{ payer }}:</span>
           <div class="payer-amount-row">
             <span class="payer-amount-text">¥{{ stat.toFixed(2) }}</span>
-            <span class="payer-third-text">¥{{ (stat / 3).toFixed(2) }}</span>
+            <span class="payer-third-text">¥{{ (stat / activePayerCount).toFixed(2) }}</span>
           </div>
         </div>
       </div>
@@ -243,7 +275,7 @@
           <span class="filtered-payer">{{ payer }}:</span>
           <div class="filtered-amount-wrapper">
             <span class="filtered-amount">¥{{ stat.toFixed(2) }}</span>
-            <span class="filtered-third">¥{{ (stat / 3).toFixed(2) }}</span>
+            <span class="filtered-third">¥{{ (stat / activePayerCount).toFixed(2) }}</span>
           </div>
         </div>
       </div>
@@ -441,6 +473,12 @@ import { ref, computed, watch } from 'vue'
 export default {
   name: 'App',
   setup() {
+    const payerNames = ref(['李龙龙', '李志豪', '魏兴兴'])
+    const savedPayerNames = ref(['李龙龙', '李志豪', '魏兴兴'])
+    const deletedPayers = ref([])
+    const resetPassword = ref('')
+    const hasResetBackup = ref(false)
+
     const newRecord = ref({
       timeDisplay: new Date().toLocaleString('zh-CN', {
         year: 'numeric',
@@ -450,7 +488,7 @@ export default {
         minute: '2-digit'
       }).replace(/,/g, ''),
       time: new Date().toISOString(),
-      payer: '李龙龙',
+      payer: payerNames.value[0] || '李龙龙',
       category: '1 住宿',
       amount: null
     })
@@ -501,13 +539,17 @@ export default {
         recentMode.value = savedMode
       }
       
+      loadPayerNames()
+      loadDeletedPayers()
+      checkResetBackup()
+      
       // 检查补助预估是否超过 5000，超过则弹窗提示
       if (records.value.length > 0) {
         const uniqueDays = new Set(records.value.map(record => {
           const date = new Date(record.time)
           return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`
         }))
-        const subsidyAmount = uniqueDays.size * 170
+        const subsidyAmount = (uniqueDays.size - 1) * 170
         
         if (subsidyAmount > 5000) {
           setTimeout(() => {
@@ -664,6 +706,187 @@ export default {
 
     loadRecords()
 
+    const loadPayerNames = () => {
+      const saved = localStorage.getItem('payerNames')
+      if (saved) {
+        try {
+          const names = JSON.parse(saved)
+          if (Array.isArray(names) && names.length >= 1) {
+            payerNames.value = names
+          }
+        } catch (e) {}
+      }
+      savedPayerNames.value = [...payerNames.value]
+    }
+
+    const savePayerNames = () => {
+      for (let i = 0; i < savedPayerNames.value.length && i < payerNames.value.length; i++) {
+        const oldName = savedPayerNames.value[i]
+        const newName = payerNames.value[i]
+        if (oldName !== newName) {
+          records.value.forEach(record => {
+            if (record.payer === oldName) {
+              record.payer = newName
+            }
+          })
+        }
+      }
+      savedPayerNames.value = [...payerNames.value]
+      localStorage.setItem('payerNames', JSON.stringify(payerNames.value))
+    }
+
+    const addPayer = () => {
+      payerNames.value.push('新人员')
+      savePayerNames()
+    }
+
+    const deletePayer = (index) => {
+      if (payerNames.value.length <= 1) return
+      const deletedName = payerNames.value[index]
+      const deletedRecords = records.value.filter(r => r.payer === deletedName)
+      const recordCount = deletedRecords.length
+      const confirmMsg = recordCount > 0
+        ? `删除「${deletedName}」将同时删除其 ${recordCount} 条记录，确定吗？`
+        : `确定删除「${deletedName}」吗？`
+      if (!confirm(confirmMsg)) return
+      records.value = records.value.filter(r => r.payer !== deletedName)
+      payerNames.value.splice(index, 1)
+      savePayerNames()
+      deletedPayers.value.unshift({
+        name: deletedName,
+        deletedAt: new Date().toISOString(),
+        records: deletedRecords
+      })
+      saveDeletedPayers()
+    }
+
+    const restorePayer = (item) => {
+      const idx = deletedPayers.value.findIndex(d => d.deletedAt === item.deletedAt && d.name === item.name)
+      if (idx === -1) return
+      payerNames.value.push(item.name)
+      savePayerNames()
+      if (item.records && item.records.length > 0) {
+        records.value.push(...item.records)
+      }
+      deletedPayers.value.splice(idx, 1)
+      saveDeletedPayers()
+    }
+
+    const deletePermanently = (item) => {
+      if (!confirm(`确定彻底删除「${item.name}」吗？不可恢复。`)) return
+      const idx = deletedPayers.value.findIndex(d => d.deletedAt === item.deletedAt && d.name === item.name)
+      if (idx === -1) return
+      deletedPayers.value.splice(idx, 1)
+      saveDeletedPayers()
+    }
+
+    const loadDeletedPayers = () => {
+      const saved = localStorage.getItem('deletedPayers')
+      if (saved) {
+        try {
+          const list = JSON.parse(saved)
+          if (Array.isArray(list)) {
+            deletedPayers.value = list
+          }
+        } catch (e) {}
+      }
+    }
+
+    const saveDeletedPayers = () => {
+      localStorage.setItem('deletedPayers', JSON.stringify(deletedPayers.value))
+    }
+
+    const recentDeletedPayers = computed(() => {
+      const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000
+      return deletedPayers.value.filter(item => {
+        return new Date(item.deletedAt).getTime() > threeDaysAgo
+      })
+    })
+
+    const checkResetBackup = () => {
+      const saved = localStorage.getItem('resetBackup')
+      if (!saved) {
+        hasResetBackup.value = false
+        return
+      }
+      try {
+        const backup = JSON.parse(saved)
+        const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000
+        hasResetBackup.value = new Date(backup.resetAt).getTime() > thirtyDaysAgo
+      } catch (e) {
+        hasResetBackup.value = false
+      }
+    }
+
+    const resetAllData = () => {
+      if (resetPassword.value !== 'admin') {
+        alert('密码错误')
+        return
+      }
+      if (confirm('确定要重置所有数据吗？30天内可恢复。')) {
+        const backup = {
+          expenseRecords: JSON.parse(localStorage.getItem('expenseRecords') || 'null'),
+          lastSettlementTime: localStorage.getItem('lastSettlementTime') || '',
+          recentStatsMode: localStorage.getItem('recentStatsMode') || 'settlement',
+          payerNames: JSON.parse(localStorage.getItem('payerNames') || 'null'),
+          deletedPayers: JSON.parse(localStorage.getItem('deletedPayers') || 'null'),
+          resetAt: new Date().toISOString()
+        }
+        localStorage.setItem('resetBackup', JSON.stringify(backup))
+        localStorage.removeItem('expenseRecords')
+        localStorage.removeItem('lastSettlementTime')
+        localStorage.removeItem('recentStatsMode')
+        records.value = []
+        lastSettlementTime.value = ''
+        recentMode.value = 'settlement'
+        resetPassword.value = ''
+        checkResetBackup()
+        alert('数据已重置')
+      }
+    }
+
+    const recoverResetData = () => {
+      const saved = localStorage.getItem('resetBackup')
+      if (!saved) return
+      try {
+        const backup = JSON.parse(saved)
+        const resetTime = new Date(backup.resetAt)
+        const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000
+        if (resetTime.getTime() < thirtyDaysAgo) {
+          alert('备份已超过30天，无法恢复')
+          localStorage.removeItem('resetBackup')
+          return
+        }
+        if (!confirm(`恢复 ${resetTime.toLocaleString('zh-CN')} 重置前的数据？当前数据将被覆盖。`)) return
+        if (backup.expenseRecords) {
+          localStorage.setItem('expenseRecords', JSON.stringify(backup.expenseRecords))
+          records.value = backup.expenseRecords
+        }
+        if (backup.lastSettlementTime) {
+          localStorage.setItem('lastSettlementTime', backup.lastSettlementTime)
+          lastSettlementTime.value = backup.lastSettlementTime
+        }
+        if (backup.recentStatsMode) {
+          localStorage.setItem('recentStatsMode', backup.recentStatsMode)
+          recentMode.value = backup.recentStatsMode
+        }
+        if (backup.payerNames) {
+          localStorage.setItem('payerNames', JSON.stringify(backup.payerNames))
+          payerNames.value = backup.payerNames
+          savedPayerNames.value = [...backup.payerNames]
+        }
+        if (backup.deletedPayers) {
+          localStorage.setItem('deletedPayers', JSON.stringify(backup.deletedPayers))
+          deletedPayers.value = backup.deletedPayers
+        }
+        localStorage.removeItem('resetBackup')
+        checkResetBackup()
+        alert('数据已恢复')
+      } catch (e) {
+        alert('恢复失败：' + e.message)
+      }
+    }
+
     const addRecord = () => {
       if (!newRecord.value.amount || newRecord.value.amount <= 0) {
         alert('请输入有效金额')
@@ -695,7 +918,7 @@ export default {
           minute: '2-digit'
         }).replace(/,/g, ''),
         time: new Date().toISOString(),
-        payer: '李龙龙',
+        payer: payerNames.value[0] || '李龙龙',
         category: '1 住宿',
         amount: null
       }
@@ -946,7 +1169,7 @@ export default {
         const date = new Date(record.time)
         return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`
       }))
-      return uniqueDays.size * 170
+      return (uniqueDays.size - 1) * 170
     })
 
     const uniqueDaysCount = computed(() => {
@@ -954,6 +1177,16 @@ export default {
         const date = new Date(record.time)
         return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`
       })).size
+    })
+
+    const activePayerCount = computed(() => {
+      const payers = new Set()
+      records.value.forEach(r => {
+        if (r.payer && r.payer !== '未知') {
+          payers.add(r.payer)
+        }
+      })
+      return Math.max(payers.size, 1)
     })
 
     const sortedRecords = computed(() => {
@@ -1088,6 +1321,17 @@ export default {
       const hour = date.getHours().toString().padStart(2, '0')
       const minute = date.getMinutes().toString().padStart(2, '0')
       return `${year}/${month}/${day} ${hour}:${minute}`
+    }
+
+    const formatDeletedTime = (timeStr) => {
+      const date = new Date(timeStr)
+      const now = Date.now()
+      const diff = now - date.getTime()
+      const hours = Math.floor(diff / (1000 * 60 * 60))
+      if (hours < 1) return '刚刚'
+      if (hours < 24) return `${hours} 小时前`
+      const days = Math.floor(hours / 24)
+      return `${days} 天前`
     }
 
     const applyDateFilter = () => {
@@ -1285,7 +1529,20 @@ export default {
       saveEdit,
       cancelEdit,
       deleteClickCount,
-      recordToDelete
+      recordToDelete,
+      activePayerCount,
+      payerNames,
+      resetPassword,
+      savePayerNames,
+      addPayer,
+      deletePayer,
+      restorePayer,
+      deletePermanently,
+      recentDeletedPayers,
+      formatDeletedTime,
+      resetAllData,
+      recoverResetData,
+      hasResetBackup
     }
   }
 }
@@ -1784,5 +2041,192 @@ export default {
   background: #e3f2fd;
   padding: 15px;
   border-radius: 8px;
+}
+
+.total-avg {
+  font-size: 14px;
+  color: #999;
+  font-weight: 400;
+}
+
+.settings-section {
+  background: #fafafa;
+  padding: 15px;
+  border-radius: 8px;
+  margin-bottom: 15px;
+  border: 1px solid #eee;
+}
+
+.payer-names-edit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.payer-name-input-row {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+  min-width: 100px;
+}
+
+.payer-name-input-row input {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.btn-delete-payer {
+  padding: 4px 8px;
+  background: #ff5252;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.btn-delete-payer:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.btn-add-payer {
+  padding: 8px 14px;
+  background: #4caf50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.deleted-payers {
+  margin-top: 8px;
+  padding: 8px;
+  background: #fff8e1;
+  border-radius: 4px;
+  border: 1px solid #ffe082;
+}
+
+.deleted-label {
+  font-size: 12px;
+  color: #f57c00;
+  font-weight: 500;
+  display: block;
+  margin-bottom: 6px;
+}
+
+.deleted-payer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.deleted-name {
+  font-size: 14px;
+  color: #333;
+}
+
+.deleted-time {
+  font-size: 12px;
+  color: #999;
+  flex: 1;
+}
+
+.btn-restore-payer {
+  padding: 3px 10px;
+  background: #ff9800;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.btn-restore-payer:hover {
+  background: #f57c00;
+}
+
+.btn-delete-forever {
+  padding: 3px 10px;
+  background: #d32f2f;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.btn-delete-forever:hover {
+  background: #b71c1c;
+}
+
+.reset-row {
+  display: flex;
+  gap: 8px;
+}
+
+.reset-row input {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.btn-reset {
+  padding: 8px 16px;
+  background: #f44336;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.btn-reset:active {
+  background: #d32f2f;
+}
+
+.reset-backup-row {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #e8f5e9;
+  border-radius: 4px;
+  border: 1px solid #a5d6a7;
+}
+
+.backup-hint {
+  font-size: 12px;
+  color: #2e7d32;
+  flex: 1;
+}
+
+.btn-recover-reset {
+  padding: 4px 12px;
+  background: #4caf50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.btn-recover-reset:hover {
+  background: #388e3c;
 }
 </style>
