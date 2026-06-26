@@ -24,6 +24,7 @@
 
     <div class="form">
       <h2 class="form-title">添加记录</h2>
+      <div v-if="isTerminated" class="terminated-notice">当前记录已截止，点击"重新开始"开启新旅程</div>
       
       <div class="form-group">
         <label>时间</label>
@@ -32,19 +33,20 @@
           v-model="newRecord.timeDisplay"
           placeholder="2024/01/15 09:30"
           required
+          :disabled="isTerminated"
         />
       </div>
 
       <div class="form-group">
         <label>付款人</label>
-        <select v-model="newRecord.payer">
+        <select v-model="newRecord.payer" :disabled="isTerminated">
           <option v-for="name in payerNames" :key="name" :value="name">{{ name }}</option>
         </select>
       </div>
 
       <div class="form-group">
         <label>类别</label>
-        <select v-model="newRecord.category">
+        <select v-model="newRecord.category" :disabled="isTerminated">
           <option value="1 住宿">1 住宿</option>
           <option value="2 早餐">2 早餐</option>
           <option value="3 午餐">3 午餐</option>
@@ -63,10 +65,21 @@
           min="0"
           placeholder="0.00"
           required
+          :disabled="isTerminated"
         />
       </div>
 
-      <button class="btn-add" @click="addRecord">添加记录</button>
+      <div class="btn-row">
+        <button class="btn-add" @click="addRecord" :disabled="isTerminated">添加记录</button>
+        <button class="btn-stop" @click="showPwd('stop')" :disabled="isTerminated">截止记录</button>
+        <button class="btn-restart" @click="showPwd('restart')">重新开始</button>
+      </div>
+      <div v-if="showPwdInput" class="pwd-row">
+        <span class="pwd-hint">密码 (admin)：</span>
+        <input type="password" v-model="pwdValue" class="pwd-input" placeholder="请输入 admin" @keyup.enter="confirmPwdAction" />
+        <button class="btn-pwd-confirm" @click="confirmPwdAction">确认</button>
+        <button class="btn-pwd-cancel" @click="cancelPwd">取消</button>
+      </div>
     </div>
 
     <div class="settings-section">
@@ -368,7 +381,7 @@
                 style="cursor: pointer;"
                 title="双击编辑金额"
               >
-                ¥{{ record.amount.toFixed(2) }}
+                ¥{{ (Number(record.amount) || 0).toFixed(2) }}
               </div>
             </div>
             <div class="record-actions">
@@ -403,11 +416,11 @@
             </div>
           </div>
 
-        <div v-if="totalPages > 1" class="pagination">
+        <div v-if="totalPages > 1 || showAll || records.length > pageSize" class="pagination">
           <button 
             class="pagination-btn" 
             @click="goToPrevious" 
-            :disabled="currentPage === 1"
+            :disabled="currentPage === 1 || showAll"
           >
             上一页
           </button>
@@ -417,9 +430,12 @@
           <button 
             class="pagination-btn" 
             @click="goToNext" 
-            :disabled="currentPage === totalPages"
+            :disabled="currentPage === totalPages || showAll"
           >
             下一页
+          </button>
+          <button class="pagination-btn btn-show-all" @click="toggleShowAll">
+            {{ showAll ? '收起' : '显示全部' }}
           </button>
         </div>
       </div>
@@ -501,6 +517,7 @@ export default {
 
     const currentPage = ref(1)
     const pageSize = 10
+    const showAll = ref(false)
 
     const editingRecord = ref(null)
     const showNoteInput = ref(false)
@@ -525,10 +542,16 @@ export default {
     const pickerYear = ref(new Date().getFullYear())
     const pickerMonth = ref(new Date().getMonth() + 1)
 
+    const isTerminated = ref(false)
+
     const loadRecords = () => {
       const saved = localStorage.getItem('expenseRecords')
       if (saved) {
-        records.value = JSON.parse(saved)
+        records.value = JSON.parse(saved).map(r => ({
+          ...r,
+          amount: typeof r.amount === 'number' ? r.amount : parseFloat(r.amount) || 0,
+          note: r.note || ''
+        }))
       }
       const settlement = localStorage.getItem('lastSettlementTime')
       if (settlement) {
@@ -538,10 +561,17 @@ export default {
       if (savedMode) {
         recentMode.value = savedMode
       }
+      const terminated = localStorage.getItem('isTerminated')
+      if (terminated === 'true') {
+        isTerminated.value = true
+      }
       
       loadPayerNames()
+      newRecord.value.payer = payerNames.value[0] || '李龙龙'
       loadDeletedPayers()
       checkResetBackup()
+      
+      if (isTerminated.value) return
       
       // 检查补助预估是否超过 5000，超过则弹窗提示
       if (records.value.length > 0) {
@@ -703,8 +733,6 @@ export default {
     }
 
     watch(records, saveRecords, { deep: true })
-
-    loadRecords()
 
     const loadPayerNames = () => {
       const saved = localStorage.getItem('payerNames')
@@ -887,7 +915,52 @@ export default {
       }
     }
 
+    const showPwdInput = ref(false)
+    const pwdValue = ref('')
+    const pwdTarget = ref('')
+
+    const showPwd = (target) => {
+      showPwdInput.value = true
+      pwdTarget.value = target
+      pwdValue.value = ''
+    }
+
+    const cancelPwd = () => {
+      showPwdInput.value = false
+      pwdValue.value = ''
+      pwdTarget.value = ''
+    }
+
+    const confirmPwdAction = () => {
+      if (pwdValue.value !== 'admin') {
+        alert('密码错误')
+        return
+      }
+      if (pwdTarget.value === 'stop') {
+        if (!confirm('确定要截止当前记录吗？截止后将停止所有弹窗提示，表示这一段数据告一段落。')) return
+        isTerminated.value = true
+        showMissingRecordModal.value = false
+        localStorage.setItem('isTerminated', 'true')
+        alert('记录已截止')
+      } else if (pwdTarget.value === 'restart') {
+        if (!confirm('确定要重新开始吗？当前所有记录将被清除，开启新一段旅程。')) return
+        records.value = []
+        isTerminated.value = false
+        lastSettlementTime.value = ''
+        showMissingRecordModal.value = false
+        localStorage.setItem('expenseRecords', JSON.stringify([]))
+        localStorage.removeItem('isTerminated')
+        localStorage.removeItem('lastSettlementTime')
+        alert('已重新开始，记录已清空')
+      }
+      cancelPwd()
+    }
+
     const addRecord = () => {
+      if (isTerminated.value) {
+        alert('当前记录已截止，请点击"重新开始"开启新旅程')
+        return
+      }
       if (!newRecord.value.amount || newRecord.value.amount <= 0) {
         alert('请输入有效金额')
         return
@@ -905,7 +978,7 @@ export default {
         time: parsedTime,
         payer: newRecord.value.payer,
         category: newRecord.value.category,
-        amount: newRecord.value.amount,
+        amount: Number(newRecord.value.amount) || 0,
         note: ''
       })
 
@@ -1038,7 +1111,7 @@ export default {
             if (!stats[payer]) {
               stats[payer] = 0
             }
-            stats[payer] += record.amount
+            stats[payer] += Number(record.amount) || 0
           }
         })
       } else if (recentMode.value === 'days') {
@@ -1055,7 +1128,7 @@ export default {
             if (!stats[payer]) {
               stats[payer] = 0
             }
-            stats[payer] += record.amount
+            stats[payer] += Number(record.amount) || 0
           }
         })
       }
@@ -1152,7 +1225,7 @@ export default {
           if (!stats[payer]) {
             stats[payer] = 0
           }
-          stats[payer] += record.amount
+          stats[payer] += Number(record.amount) || 0
         }
       })
       return stats
@@ -1160,7 +1233,7 @@ export default {
 
     const totalAmount = computed(() => {
       return records.value.reduce((sum, record) => {
-        return sum + record.amount
+        return sum + (Number(record.amount) || 0)
       }, 0)
     })
 
@@ -1180,13 +1253,7 @@ export default {
     })
 
     const activePayerCount = computed(() => {
-      const payers = new Set()
-      records.value.forEach(r => {
-        if (r.payer && r.payer !== '未知') {
-          payers.add(r.payer)
-        }
-      })
-      return Math.max(payers.size, 1)
+      return Math.max(payerNames.value.length, 1)
     })
 
     const sortedRecords = computed(() => {
@@ -1220,6 +1287,7 @@ export default {
       const sorted = [...filtered].sort((a, b) => {
         return new Date(b.time) - new Date(a.time)
       })
+      if (showAll.value) return sorted
       const start = (currentPage.value - 1) * pageSize
       const end = start + pageSize
       return sorted.slice(start, end)
@@ -1268,6 +1336,10 @@ export default {
       }
     }
 
+    const toggleShowAll = () => {
+      showAll.value = !showAll.value
+    }
+
     const payerStats = computed(() => {
       const stats = {}
       records.value.forEach(record => {
@@ -1275,7 +1347,7 @@ export default {
         if (!stats[payer]) {
           stats[payer] = 0
         }
-        stats[payer] += record.amount
+        stats[payer] += Number(record.amount) || 0
       })
       return stats
     })
@@ -1308,7 +1380,7 @@ export default {
         if (!stats[payer]) {
           stats[payer] = 0
         }
-        stats[payer] += record.amount
+        stats[payer] += Number(record.amount) || 0
       })
       return stats
     })
@@ -1410,8 +1482,20 @@ export default {
           }
           
           if (confirm('导入将覆盖当前数据，确定继续吗？')) {
-            records.value = recordsToImport
-            alert('导入成功！')
+            records.value = recordsToImport.map((r, i) => ({
+              id: r.id || (Date.now() + i),
+              time: r.time || new Date().toISOString(),
+              payer: r.payer || '未知',
+              category: r.category || '6 其他',
+              amount: typeof r.amount === 'number' ? r.amount : parseFloat(r.amount) || 0,
+              note: r.note || ''
+            }))
+            saveRecords()
+            currentPage.value = 1
+            isFiltered.value = false
+            filterStartDate.value = ''
+            filterEndDate.value = ''
+            alert('导入成功！共 ' + records.value.length + ' 条记录')
           }
         } catch (err) {
           alert('文件解析失败：' + err.message)
@@ -1463,6 +1547,8 @@ export default {
              day === today.getDate()
     }
 
+    loadRecords()
+
     return {
       newRecord,
       records,
@@ -1494,6 +1580,8 @@ export default {
       goToPage,
       goToPrevious,
       goToNext,
+      showAll,
+      toggleShowAll,
       formatTime,
       payerStats,
       accommodationStats,
@@ -1542,7 +1630,13 @@ export default {
       formatDeletedTime,
       resetAllData,
       recoverResetData,
-      hasResetBackup
+      hasResetBackup,
+      isTerminated,
+      showPwdInput,
+      pwdValue,
+      showPwd,
+      confirmPwdAction,
+      cancelPwd
     }
   }
 }
@@ -2228,5 +2322,142 @@ export default {
 
 .btn-recover-reset:hover {
   background: #388e3c;
+}
+
+.btn-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 5px;
+}
+
+.btn-add {
+  flex: 2;
+  padding: 14px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.btn-add:active {
+  transform: scale(0.98);
+}
+
+.btn-stop {
+  flex: 1;
+  padding: 14px 8px;
+  background: #ff9800;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.3s;
+  white-space: nowrap;
+}
+
+.btn-stop:hover:not(:disabled) {
+  background: #f57c00;
+}
+
+.btn-stop:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.btn-restart {
+  flex: 1;
+  padding: 14px 8px;
+  background: #4caf50;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.3s;
+  white-space: nowrap;
+}
+
+.btn-restart:hover {
+  background: #388e3c;
+}
+
+.terminated-notice {
+  background: #fff3e0;
+  border: 1px solid #ff9800;
+  border-radius: 8px;
+  padding: 10px 16px;
+  margin-bottom: 15px;
+  color: #e65100;
+  font-size: 14px;
+  text-align: center;
+  font-weight: 500;
+}
+
+.pwd-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #f9f9ff;
+  border: 1px solid #667eea;
+  border-radius: 8px;
+}
+
+.pwd-hint {
+  font-size: 13px;
+  color: #666;
+  white-space: nowrap;
+}
+
+.pwd-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  font-size: 14px;
+  min-width: 0;
+}
+
+.pwd-input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.btn-pwd-confirm {
+  padding: 8px 16px;
+  background: #667eea;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.btn-pwd-confirm:hover {
+  background: #5568d3;
+}
+
+.btn-pwd-cancel {
+  padding: 8px 16px;
+  background: #f0f0f0;
+  color: #666;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.btn-pwd-cancel:hover {
+  background: #e0e0e0;
 }
 </style>
